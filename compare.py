@@ -96,68 +96,57 @@ def detect_time_offset(file1: str, file2: str, max_offset: int = 60) -> tuple:
         return 0, 0.0
 
 
-def align_audio_files(file1: str, file2: str, offset_seconds: float, output_file: str) -> bool:
+def align_audio_files(file1: str, file2: str, offset_seconds: float, output_file1: str, output_file2: str) -> bool:
     """
-    Align file2 to file1 by adjusting for time offset.
+    Align both files by trimming the appropriate one based on offset.
     
     Returns True if alignment was successful, False otherwise.
     """
     try:
         print(f"  ✂️  Aligning audio (offset: {offset_seconds:.2f}s)...")
         
-        os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
+        os.makedirs(os.path.dirname(output_file1) or ".", exist_ok=True)
+        os.makedirs(os.path.dirname(output_file2) or ".", exist_ok=True)
         
         if abs(offset_seconds) < 0.5:
-            # Offset too small, just copy
-            shutil.copy2(file2, output_file)
-            print(f"  ✓ Offset too small, using original")
+            # Offset too small, just copy both
+            shutil.copy2(file1, output_file1)
+            shutil.copy2(file2, output_file2)
+            print(f"  ✓ Offset too small, using originals")
             return True
         
         if offset_seconds > 0:
-            # file2 is ahead, skip first N seconds of file2
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", file2,
+            # file2 is ahead, skip first N seconds of file2, keep file1 as-is
+            cmd1 = [
+                "ffmpeg", "-y", "-i", file1,
+                "-t", "20", "-acodec", "pcm_s16le",
+                "-ar", "16000", "-ac", "1", output_file1,
+            ]
+            cmd2 = [
+                "ffmpeg", "-y", "-i", file2,
                 "-ss", f"{abs(offset_seconds):.2f}",
-                "-t", "20",
-                "-acodec", "pcm_s16le",
-                "-ar", "16000",
-                "-ac", "1",
-                output_file,
+                "-t", "20", "-acodec", "pcm_s16le",
+                "-ar", "16000", "-ac", "1", output_file2,
             ]
         else:
-            # file2 is behind, skip first N seconds of file1 and keep file2 as is
-            # Actually, we want to delay file2 by adding silence at the beginning
-            # But for comparison, it's easier to trim file1 instead
-            # So we'll create a trimmed version of file1
-            temp_file1_trimmed = "temp/ref_trimmed.wav"
-            cmd_trim = [
-                "ffmpeg", "-y",
-                "-i", file1,
+            # file2 is behind, skip first N seconds of file1, keep file2 as-is
+            cmd1 = [
+                "ffmpeg", "-y", "-i", file1,
                 "-ss", f"{abs(offset_seconds):.2f}",
-                "-t", "20",
-                "-acodec", "pcm_s16le",
-                "-ar", "16000",
-                "-ac", "1",
-                temp_file1_trimmed,
+                "-t", "20", "-acodec", "pcm_s16le",
+                "-ar", "16000", "-ac", "1", output_file1,
             ]
-            result_trim = subprocess.run(cmd_trim, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=30)
-            
-            # Now copy file2 to output
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", file2,
-                "-t", "20",
-                "-acodec", "pcm_s16le",
-                "-ar", "16000",
-                "-ac", "1",
-                output_file,
+            cmd2 = [
+                "ffmpeg", "-y", "-i", file2,
+                "-t", "20", "-acodec", "pcm_s16le",
+                "-ar", "16000", "-ac", "1", output_file2,
             ]
         
-        result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=30)
+        result1 = subprocess.run(cmd1, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=30)
+        result2 = subprocess.run(cmd2, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=30)
         
-        if result.returncode == 0 and os.path.exists(output_file):
-            print(f"  ✓ Audio aligned and saved")
+        if result1.returncode == 0 and result2.returncode == 0:
+            print(f"  ✓ Both files aligned successfully")
             return True
         else:
             print(f"  ⚠️  Alignment failed")
@@ -193,31 +182,13 @@ def compare_audio(file1: str, file2: str, detect_offset: bool = True) -> tuple:
             
             # If offset is significant, align the files
             if abs(offset_seconds) > 1.0:
-                temp_aligned2 = "temp/aligned2.wav"
                 temp_aligned1 = "temp/aligned1.wav"
+                temp_aligned2 = "temp/aligned2.wav"
                 
-                if offset_seconds > 0:
-                    # file2 is ahead, trim beginning of file2
-                    if align_audio_files(file1, file2, offset_seconds, temp_aligned2):
-                        file2_to_compare = temp_aligned2
-                        print(f"  → Comparing with file2 trimmed by {offset_seconds:.2f}s")
-                else:
-                    # file2 is behind, trim beginning of file1
-                    if align_audio_files(file1, file2, offset_seconds, temp_aligned1):
-                        file1_to_compare = temp_aligned1
-                        # Also need to adjust file2
-                        cmd = [
-                            "ffmpeg", "-y",
-                            "-i", file2,
-                            "-t", "20",
-                            "-acodec", "pcm_s16le",
-                            "-ar", "16000",
-                            "-ac", "1",
-                            temp_aligned2,
-                        ]
-                        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=30)
-                        file2_to_compare = temp_aligned2
-                        print(f"  → Comparing with file1 trimmed by {abs(offset_seconds):.2f}s")
+                if align_audio_files(file1, file2, offset_seconds, temp_aligned1, temp_aligned2):
+                    file1_to_compare = temp_aligned1
+                    file2_to_compare = temp_aligned2
+                    print(f"  → Comparing aligned files (offset corrected: {offset_seconds:.2f}s)")
         
         # Get fingerprints
         print(f"  Generating fingerprints...")
@@ -279,7 +250,7 @@ def _compare_fingerprints_smart(fpcalc_path: str, fp1: str, fp2: str) -> float:
         print(f"  → Perfect fingerprint match!")
         return 1.0
     
-    # Try parsing and comparing as integer arrays
+    # Try parsing and comparing as integer arrays (chromaprint format)
     try:
         arr1 = [int(x) for x in fp1.split(',')]
         arr2 = [int(x) for x in fp2.split(',')]
@@ -288,23 +259,53 @@ def _compare_fingerprints_smart(fpcalc_path: str, fp1: str, fp2: str) -> float:
         max_sim = 0.0
         window_size = min(len(arr1), len(arr2))
         
-        for offset in range(-10, 11):  # Try small offsets
+        # Try different alignments in fingerprint space
+        for offset in range(-10, 11):
             if offset < 0:
-                a1 = arr1[-offset:window_size-offset] if window_size-offset <= len(arr1) else arr1[-offset:]
-                a2 = arr2[:len(a1)]
+                start1 = -offset
+                start2 = 0
+                length = min(len(arr1) - start1, len(arr2) - start2, window_size)
             else:
-                a2 = arr2[offset:window_size+offset] if window_size+offset <= len(arr2) else arr2[offset:]
-                a1 = arr1[:len(a2)]
+                start1 = 0
+                start2 = offset
+                length = min(len(arr1) - start1, len(arr2) - start2, window_size)
+            
+            if length <= 0:
+                continue
+            
+            a1 = arr1[start1:start1 + length]
+            a2 = arr2[start2:start2 + length]
             
             if len(a1) > 0 and len(a2) > 0:
                 # Hamming distance on integer fingerprints
-                matches = sum(1 for x, y in zip(a1, a2) if bin(x ^ y).count('1') <= 16)  # Allow 16-bit differences
+                # Allow up to 16-bit differences per hash (accounts for compression)
+                matches = sum(1 for x, y in zip(a1, a2) if bin(x ^ y).count('1') <= 16)
                 sim = matches / len(a1)
                 max_sim = max(max_sim, sim)
         
-        if max_sim > 0.5:
+        if max_sim > 0.4:
             print(f"  (fingerprint array match: {max_sim:.3f})")
             return max_sim
+    except Exception as e:
+        print(f"  (fingerprint parsing failed: {e})")
+        pass
+    
+    # Try fpcalc's built-in compare
+    try:
+        result = subprocess.run(
+            [fpcalc_path, "-compare", fp1, fp2],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            try:
+                score = float(result.stdout.strip())
+                normalized = min(max(score / 100.0, 0.0), 1.0)
+                print(f"  (fpcalc-compare: {score:.1f}% → {normalized:.3f})")
+                return normalized
+            except:
+                pass
     except:
         pass
     
@@ -331,15 +332,18 @@ def _check_fingerprint_overlap(fp1: str, fp2: str) -> float:
     
     for i in range(0, len(fp1) - chunk_size, chunk_size // 2):
         chunk1 = fp1[i : i + chunk_size]
+        best_match = 0
         for j in range(0, len(fp2) - chunk_size, chunk_size // 2):
             chunk2 = fp2[j : j + chunk_size]
             if chunk1 == chunk2:
-                matches += 1
+                best_match = 1.0
+                break
             # Also check similarity
             elif len(chunk1) == len(chunk2):
                 sim = sum(1 for a, b in zip(chunk1, chunk2) if a == b) / len(chunk1)
-                if sim > 0.8:
-                    matches += sim
+                best_match = max(best_match, sim)
+        
+        matches += best_match
         total_checks += 1
     
     if total_checks == 0:

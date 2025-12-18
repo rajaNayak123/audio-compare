@@ -17,8 +17,9 @@ CHUNK_SECONDS = 20
 SLEEP_BETWEEN = 3
 NUM_CHUNKS_AGG = 5
 
-SAME_THRESHOLD = 0.70
-SIMILAR_THRESHOLD = 0.45
+# Adjusted thresholds for more lenient matching
+SAME_THRESHOLD = 0.50  # Lowered from 0.70
+SIMILAR_THRESHOLD = 0.35  # Lowered from 0.45
 
 
 def ensure_temp_dir():
@@ -154,3 +155,4 @@ def run():
 
 if __name__ == "__main__":
     run()
+    
